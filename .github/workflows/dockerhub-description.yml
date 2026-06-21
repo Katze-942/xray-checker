@@ -10,16 +10,23 @@ jobs:
   PushContainerReadme:
     runs-on: ubuntu-latest
     name: Push README to Docker Hub
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
     steps:
       - name: git checkout
         uses: actions/checkout@v2
+      - name: Skip Docker Hub README update
+        if: ${{ env.DOCKERHUB_USERNAME == '' || env.DOCKERHUB_TOKEN == '' }}
+        run: echo "Skipping Docker Hub README update because DOCKERHUB_USERNAME or DOCKERHUB_TOKEN is not configured."
       - name: push README to Dockerhub
+        if: ${{ env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
         uses: christian-korneck/update-container-description-action@v1
         env:
-          DOCKER_USER: ${{ secrets.DOCKERHUB_USERNAME }}
-          DOCKER_PASS: ${{ secrets.DOCKERHUB_TOKEN }}
+          DOCKER_USER: ${{ env.DOCKERHUB_USERNAME }}
+          DOCKER_PASS: ${{ env.DOCKERHUB_TOKEN }}
         with:
-          destination_container_repo: ${{ secrets.DOCKERHUB_USERNAME }}/xray-checker
+          destination_container_repo: ${{ env.DOCKERHUB_USERNAME }}/xray-checker
           provider: dockerhub
           short_description: "Xray Checker: A Prometheus exporter for monitoring Xray proxies"
           readme_file: "README.md"
