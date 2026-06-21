@@ -4,6 +4,20 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref, branch, or tag to build"
+        required: true
+        default: "main"
+      image_tag:
+        description: "Docker tag to publish. Defaults to ref name."
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+  packages: write
 
 jobs:
   docker:
@@ -11,16 +25,43 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
       DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+      BUILD_REF: ${{ github.event.inputs.ref || github.ref }}
+      IMAGE_TAG: ${{ github.event.inputs.image_tag }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ env.BUILD_REF }}
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-      - name: Skip Docker image publish
-        if: ${{ env.DOCKERHUB_USERNAME == '' || env.DOCKERHUB_TOKEN == '' }}
-        run: echo "Skipping Docker image publish because DOCKERHUB_USERNAME or DOCKERHUB_TOKEN is not configured."
+      - name: Prepare Docker image tags
+        id: docker-tags
+        shell: bash
+        run: |
+          repo="${GITHUB_REPOSITORY,,}"
+          image_tag="${IMAGE_TAG}"
+          if [[ -z "${image_tag}" ]]; then
+            image_tag="${BUILD_REF##*/}"
+          fi
+          echo "version_tag=${image_tag}" >> "$GITHUB_OUTPUT"
+          {
+            echo "tags<<EOF"
+            echo "ghcr.io/${repo}:latest"
+            echo "ghcr.io/${repo}:${image_tag}"
+            if [[ -n "${DOCKERHUB_USERNAME}" && -n "${DOCKERHUB_TOKEN}" ]]; then
+              echo "${DOCKERHUB_USERNAME}/xray-checker:latest"
+              echo "${DOCKERHUB_USERNAME}/xray-checker:${image_tag}"
+            fi
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       - name: Login to Docker Hub
         if: ${{ env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
         uses: docker/login-action@v3
@@ -28,16 +69,13 @@ jobs:
           username: ${{ env.DOCKERHUB_USERNAME }}
           password: ${{ env.DOCKERHUB_TOKEN }}
       - name: Build and push
-        if: ${{ env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
         uses: docker/build-push-action@v5
         with:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
           build-args: |
-            GIT_TAG=${{  github.ref_name }}
+            GIT_TAG=${{ steps.docker-tags.outputs.version_tag }}
             USERNAME=${{ github.repository_owner }}
             REPOSITORY_NAME=${{ github.event.repository.name }}
-          tags: |
-            ${{ env.DOCKERHUB_USERNAME }}/xray-checker:latest
-            ${{ env.DOCKERHUB_USERNAME }}/xray-checker:${{ github.ref_name }}
+          tags: ${{ steps.docker-tags.outputs.tags }}
