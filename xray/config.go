@@ -1,12 +1,15 @@
 package xray
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
 	"xray-checker/logger"
 	"xray-checker/models"
+
+	"github.com/xtls/xray-core/infra/conf/serial"
 )
 
 type ConfigGenerator struct{}
@@ -56,6 +59,14 @@ func (g *ConfigGenerator) ValidateConfig(configBytes []byte) error {
 		if _, ok := config[field]; !ok {
 			return fmt.Errorf("missing required field: %s", field)
 		}
+	}
+
+	xrayConfig, err := serial.DecodeJSONConfig(bytes.NewReader(configBytes))
+	if err != nil {
+		return fmt.Errorf("error decoding config: %v", err)
+	}
+	if _, err := xrayConfig.Build(); err != nil {
+		return fmt.Errorf("error building config: %v", err)
 	}
 
 	return nil
@@ -180,9 +191,172 @@ func (g *ConfigGenerator) generateProxyOutbound(proxy *models.ProxyConfig) map[s
 		}
 	}
 
-	outbound["streamSettings"] = g.generateStreamSettings(proxy)
+	outbound["streamSettings"] = g.generateRuntimeStreamSettings(proxy)
 
 	return outbound
+}
+
+func (g *ConfigGenerator) generateRuntimeStreamSettings(proxy *models.ProxyConfig) map[string]interface{} {
+	streamSettings := g.generateStreamSettings(proxy)
+	rawStreamSettings, ok := g.rawStreamSettings(proxy)
+	if ok {
+		g.mergeMaps(streamSettings, rawStreamSettings)
+		g.enforceStreamSettingsFromProxy(streamSettings, proxy)
+	}
+	g.applyFinalMask(streamSettings, proxy)
+
+	g.pruneNilValues(streamSettings)
+	return streamSettings
+}
+
+func (g *ConfigGenerator) rawStreamSettings(proxy *models.ProxyConfig) (map[string]interface{}, bool) {
+	if proxy.RawOutbound == "" {
+		return nil, false
+	}
+
+	var outbound struct {
+		StreamSettings map[string]interface{} `json:"streamSettings"`
+	}
+	if err := json.Unmarshal([]byte(proxy.RawOutbound), &outbound); err != nil {
+		logger.Warn("Failed to parse raw outbound for %s: %v", proxy.Name, err)
+		return nil, false
+	}
+	if len(outbound.StreamSettings) == 0 {
+		return nil, false
+	}
+
+	g.pruneNilValues(outbound.StreamSettings)
+	g.normalizeKCPSettings(outbound.StreamSettings, proxy)
+	return outbound.StreamSettings, true
+}
+
+func (g *ConfigGenerator) pruneNilValues(value interface{}) {
+	switch typed := value.(type) {
+	case map[string]interface{}:
+		for key, child := range typed {
+			if child == nil {
+				delete(typed, key)
+				continue
+			}
+			g.pruneNilValues(child)
+		}
+	case []interface{}:
+		for _, child := range typed {
+			g.pruneNilValues(child)
+		}
+	}
+}
+
+func (g *ConfigGenerator) mergeMaps(dst, src map[string]interface{}) {
+	for key, srcValue := range src {
+		srcMap, srcIsMap := srcValue.(map[string]interface{})
+		dstMap, dstIsMap := dst[key].(map[string]interface{})
+		if srcIsMap && dstIsMap {
+			g.mergeMaps(dstMap, srcMap)
+			continue
+		}
+		dst[key] = srcValue
+	}
+}
+
+func (g *ConfigGenerator) enforceStreamSettingsFromProxy(streamSettings map[string]interface{}, proxy *models.ProxyConfig) {
+	network := proxy.Type
+	if network == "" {
+		network = "tcp"
+	}
+	security := proxy.Security
+	if security == "" {
+		security = "none"
+	}
+
+	streamSettings["network"] = network
+	streamSettings["security"] = security
+
+	switch security {
+	case "tls":
+		tlsSettings := ensureMap(streamSettings, "tlsSettings")
+		tlsSettings["serverName"] = proxy.SNI
+		tlsSettings["allowInsecure"] = proxy.AllowInsecure
+		if proxy.Fingerprint != "" {
+			tlsSettings["fingerprint"] = proxy.Fingerprint
+		}
+		if len(proxy.ALPN) > 0 {
+			tlsSettings["alpn"] = proxy.ALPN
+		}
+	case "reality":
+		realitySettings := ensureMap(streamSettings, "realitySettings")
+		realitySettings["serverName"] = proxy.SNI
+		realitySettings["fingerprint"] = proxy.Fingerprint
+		realitySettings["publicKey"] = proxy.PublicKey
+		if proxy.ShortID != "" {
+			realitySettings["shortId"] = proxy.ShortID
+		}
+	}
+
+	switch network {
+	case "xhttp":
+		g.enforceHTTPStyleSettings(ensureMap(streamSettings, "xhttpSettings"), proxy)
+	case "splithttp":
+		g.enforceHTTPStyleSettings(ensureMap(streamSettings, "splithttpSettings"), proxy)
+	case "kcp":
+		g.normalizeKCPSettings(streamSettings, proxy)
+	case "mkcp":
+		g.normalizeKCPSettings(streamSettings, proxy)
+	}
+}
+
+func (g *ConfigGenerator) enforceHTTPStyleSettings(settings map[string]interface{}, proxy *models.ProxyConfig) {
+	if proxy.Path != "" {
+		settings["path"] = proxy.Path
+	}
+	if proxy.Host != "" {
+		settings["host"] = proxy.Host
+	}
+	if proxy.Mode != "" {
+		settings["mode"] = proxy.Mode
+	}
+}
+
+func ensureMap(parent map[string]interface{}, key string) map[string]interface{} {
+	if value, ok := parent[key].(map[string]interface{}); ok {
+		return value
+	}
+	value := map[string]interface{}{}
+	parent[key] = value
+	return value
+}
+
+func (g *ConfigGenerator) normalizeKCPSettings(streamSettings map[string]interface{}, proxy *models.ProxyConfig) {
+	network, _ := streamSettings["network"].(string)
+	if network != "kcp" && network != "mkcp" {
+		return
+	}
+
+	kcpSettings := ensureMap(streamSettings, "kcpSettings")
+	delete(kcpSettings, "header")
+	delete(kcpSettings, "seed")
+
+	if isValidKCPMTU(proxy.KCPMTU) {
+		kcpSettings["mtu"] = proxy.KCPMTU
+	} else {
+		delete(kcpSettings, "mtu")
+	}
+}
+
+func isValidKCPMTU(mtu int) bool {
+	return mtu > 0
+}
+
+func (g *ConfigGenerator) applyFinalMask(streamSettings map[string]interface{}, proxy *models.ProxyConfig) {
+	if proxy.RawFinalMask == "" {
+		return
+	}
+	var finalMask interface{}
+	if err := json.Unmarshal([]byte(proxy.RawFinalMask), &finalMask); err != nil {
+		logger.Warn("Failed to parse finalmask for %s: %v", proxy.Name, err)
+		return
+	}
+	streamSettings["finalmask"] = finalMask
 }
 
 func (g *ConfigGenerator) generateStreamSettings(proxy *models.ProxyConfig) map[string]interface{} {
@@ -253,6 +427,13 @@ func (g *ConfigGenerator) generateStreamSettings(proxy *models.ProxyConfig) map[
 			"serviceName": proxy.GetServiceName(),
 			"multiMode":   proxy.MultiMode,
 		}
+
+	case "kcp", "mkcp":
+		kcpSettings := map[string]interface{}{}
+		if isValidKCPMTU(proxy.KCPMTU) {
+			kcpSettings["mtu"] = proxy.KCPMTU
+		}
+		ss["kcpSettings"] = kcpSettings
 
 	case "http", "h2":
 		httpSettings := map[string]interface{}{"path": proxy.Path}

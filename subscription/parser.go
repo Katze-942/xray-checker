@@ -68,6 +68,7 @@ type libXrayStreamSettings struct {
 	HttpupgradeSettings *libXrayHttpupgradeSettings `json:"httpupgradeSettings"`
 	XhttpSettings       json.RawMessage             `json:"xhttpSettings"`
 	SplithttpSettings   json.RawMessage             `json:"splithttpSettings"`
+	FinalMask           json.RawMessage             `json:"finalmask"`
 }
 
 type libXrayTlsSettings struct {
@@ -126,23 +127,35 @@ type libXrayXhttpSettings struct {
 }
 
 type originalLinkData struct {
+	Server        string
+	Port          int
 	Name          string
+	UUID          string
 	Encryption    string
 	Type          string
 	Path          string
 	Host          string
+	Security      string
+	SNI           string
+	KCPMTU        int
 	AllowInsecure bool
+	RawFinalMask  string
 }
 
 type parsedLink struct {
 	Server        string
 	Port          int
 	Name          string
+	UUID          string
 	Encryption    string
 	Type          string
 	Path          string
 	Host          string
+	Security      string
+	SNI           string
+	KCPMTU        int
 	AllowInsecure bool
+	RawFinalMask  string
 }
 
 type xrayStandardSettings struct {
@@ -227,17 +240,17 @@ func (p *Parser) Parse(subscriptionData string) (*ParseResult, error) {
 		return &ParseResult{Configs: configs, Name: subName}, nil
 	}
 
-	originalData := p.parseOriginalLinks(rawData)
+	originalLinks := p.parseOriginalLinks(rawData)
 
 	cleanedData := p.cleanEmptyLines(rawData)
 
 	// Try batch parsing first
-	proxyConfigs := p.parseViaLibXray(cleanedData, originalData)
+	proxyConfigs := p.parseViaLibXray(cleanedData, originalLinks)
 
 	// If batch parsing failed, fall back to line-by-line parsing
 	if len(proxyConfigs) == 0 {
 		logger.Warn("Batch parsing failed or returned no configs, trying line-by-line parsing")
-		proxyConfigs = p.parseLineByLine(cleanedData, originalData)
+		proxyConfigs = p.parseLineByLine(cleanedData, originalLinks)
 	}
 
 	if len(proxyConfigs) == 0 {
@@ -249,7 +262,7 @@ func (p *Parser) Parse(subscriptionData string) (*ParseResult, error) {
 
 // parseViaLibXray attempts to parse all configs at once via libXray.
 // Returns parsed configs or nil if parsing fails.
-func (p *Parser) parseViaLibXray(cleanedData []byte, originalData map[string]*originalLinkData) []*models.ProxyConfig {
+func (p *Parser) parseViaLibXray(cleanedData []byte, originalLinks []*originalLinkData) []*models.ProxyConfig {
 	base64Data := base64.StdEncoding.EncodeToString(cleanedData)
 
 	resultBase64 := libXray.ConvertShareLinksToXrayJson(base64Data)
@@ -271,14 +284,15 @@ func (p *Parser) parseViaLibXray(cleanedData []byte, originalData map[string]*or
 		return nil
 	}
 
-	return p.extractOutbounds(response.Data, originalData)
+	return p.extractOutbounds(response.Data, newOriginalLinkMatcher(originalLinks))
 }
 
 // parseLineByLine parses each config line individually, skipping broken ones.
-func (p *Parser) parseLineByLine(cleanedData []byte, originalData map[string]*originalLinkData) []*models.ProxyConfig {
+func (p *Parser) parseLineByLine(cleanedData []byte, originalLinks []*originalLinkData) []*models.ProxyConfig {
 	lines := strings.Split(string(cleanedData), "\n")
 	var allConfigs []*models.ProxyConfig
 	skippedCount := 0
+	originalMatcher := newOriginalLinkMatcher(originalLinks)
 
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
@@ -309,7 +323,7 @@ func (p *Parser) parseLineByLine(cleanedData []byte, originalData map[string]*or
 			continue
 		}
 
-		configs := p.extractOutbounds(response.Data, originalData)
+		configs := p.extractOutbounds(response.Data, originalMatcher)
 		allConfigs = append(allConfigs, configs...)
 	}
 
@@ -326,7 +340,7 @@ func (p *Parser) parseLineByLine(cleanedData []byte, originalData map[string]*or
 }
 
 // extractOutbounds extracts proxy configs from libXray response data.
-func (p *Parser) extractOutbounds(data json.RawMessage, originalData map[string]*originalLinkData) []*models.ProxyConfig {
+func (p *Parser) extractOutbounds(data json.RawMessage, originalMatcher *originalLinkMatcher) []*models.ProxyConfig {
 	var xrayConfig struct {
 		Outbounds []json.RawMessage `json:"outbounds"`
 	}
@@ -340,7 +354,7 @@ func (p *Parser) extractOutbounds(data json.RawMessage, originalData map[string]
 	var proxyConfigs []*models.ProxyConfig
 	configIndex := 0
 	for _, outboundRaw := range xrayConfig.Outbounds {
-		proxyConfig, err := p.convertOutbound(outboundRaw, configIndex, originalData)
+		proxyConfig, err := p.convertOutbound(outboundRaw, configIndex, originalMatcher)
 		if err != nil {
 			logger.Debug("Skipping outbound: %v", err)
 			continue
@@ -546,8 +560,8 @@ func (p *Parser) isPrintableString(s string) bool {
 	return true
 }
 
-func (p *Parser) parseOriginalLinks(rawData []byte) map[string]*originalLinkData {
-	result := make(map[string]*originalLinkData)
+func (p *Parser) parseOriginalLinks(rawData []byte) []*originalLinkData {
+	var result []*originalLinkData
 
 	decoded := p.tryDecodeBase64(rawData)
 
@@ -560,19 +574,170 @@ func (p *Parser) parseOriginalLinks(rawData []byte) map[string]*originalLinkData
 
 		data := p.parseShareLink(line)
 		if data != nil {
-			key := fmt.Sprintf("%s:%d", data.Server, data.Port)
-			result[key] = &originalLinkData{
+			result = append(result, &originalLinkData{
+				Server:        data.Server,
+				Port:          data.Port,
 				Name:          data.Name,
+				UUID:          data.UUID,
 				Encryption:    data.Encryption,
 				Type:          data.Type,
 				Path:          data.Path,
 				Host:          data.Host,
+				Security:      data.Security,
+				SNI:           data.SNI,
+				KCPMTU:        data.KCPMTU,
 				AllowInsecure: data.AllowInsecure,
-			}
+				RawFinalMask:  data.RawFinalMask,
+			})
 		}
 	}
 
 	return result
+}
+
+type originalLinkMatcher struct {
+	links []*originalLinkData
+	used  []bool
+}
+
+func newOriginalLinkMatcher(links []*originalLinkData) *originalLinkMatcher {
+	if len(links) == 0 {
+		return nil
+	}
+	return &originalLinkMatcher{
+		links: links,
+		used:  make([]bool, len(links)),
+	}
+}
+
+func (m *originalLinkMatcher) match(proxy *models.ProxyConfig) *originalLinkData {
+	if m == nil {
+		return nil
+	}
+
+	bestIndex := -1
+	bestScore := -1
+	for i, link := range m.links {
+		if m.used[i] {
+			continue
+		}
+		score, ok := link.matchScore(proxy)
+		if !ok {
+			continue
+		}
+		if score > bestScore {
+			bestScore = score
+			bestIndex = i
+		}
+	}
+
+	if bestIndex == -1 {
+		return nil
+	}
+
+	m.used[bestIndex] = true
+	return m.links[bestIndex]
+}
+
+func (d *originalLinkData) matchScore(proxy *models.ProxyConfig) (int, bool) {
+	if !strings.EqualFold(d.Server, proxy.Server) || d.Port != proxy.Port {
+		return 0, false
+	}
+
+	score := 100
+	if add, ok := exactMatchScore(d.UUID, proxy.UUID, 40, true); ok {
+		score += add
+	} else {
+		return 0, false
+	}
+	if add, ok := exactMatchScore(d.Type, proxy.Type, 20, true); ok {
+		score += add
+	} else {
+		return 0, false
+	}
+
+	nameScore, _ := exactMatchScore(d.Name, proxy.Name, 30, false)
+	if add, ok := finalMaskMatchScore(d.RawFinalMask, proxy.RawFinalMask, 35); ok {
+		score += add
+	} else if nameScore > 0 {
+		score += 5
+	} else {
+		return 0, false
+	}
+	if add, ok := exactMatchScore(d.Path, proxy.Path, 25, true); ok {
+		score += add
+	} else {
+		return 0, false
+	}
+	if add, ok := exactMatchScore(d.Host, proxy.Host, 15, true); ok {
+		score += add
+	} else {
+		return 0, false
+	}
+	if add, ok := exactMatchScore(d.Security, proxy.Security, 20, true); ok {
+		score += add
+	} else {
+		return 0, false
+	}
+	if add, ok := exactMatchScore(d.SNI, proxy.SNI, 15, true); ok {
+		score += add
+	} else {
+		return 0, false
+	}
+	if nameScore > 0 {
+		score += nameScore
+	}
+	if add, _ := exactMatchScore(d.Encryption, proxy.Encryption, 10, false); add > 0 {
+		score += add
+	}
+
+	return score, true
+}
+
+func exactMatchScore(left, right string, score int, conflictIsMismatch bool) (int, bool) {
+	left = strings.TrimSpace(left)
+	right = strings.TrimSpace(right)
+	if left == "" || right == "" {
+		return 0, true
+	}
+	if left == right {
+		return score, true
+	}
+	if strings.EqualFold(left, right) {
+		return score, true
+	}
+	return 0, !conflictIsMismatch
+}
+
+func finalMaskMatchScore(left, right string, score int) (int, bool) {
+	left = strings.TrimSpace(left)
+	right = strings.TrimSpace(right)
+	if left == "" || right == "" {
+		return 0, true
+	}
+	if left == right {
+		return score, true
+	}
+	if normalizeRawJSONString(left) == normalizeRawJSONString(right) {
+		return score, true
+	}
+	return 0, false
+}
+
+func normalizeRawJSONString(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	var parsed interface{}
+	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
+		return raw
+	}
+	normalized, err := json.Marshal(parsed)
+	if err != nil {
+		return raw
+	}
+	return string(normalized)
 }
 
 func (p *Parser) parseShareLink(link string) *parsedLink {
@@ -600,13 +765,27 @@ func (p *Parser) parseShareLink(link string) *parsedLink {
 	}
 	result.Server = host
 	result.Port = port
+	if user := u.User.Username(); user != "" {
+		result.UUID = user
+	}
 
 	query := u.Query()
 	result.Type = query.Get("type")
 	result.Encryption = query.Get("encryption")
 	result.Path = query.Get("path")
 	result.Host = query.Get("host")
+	result.Security = query.Get("security")
+	result.SNI = query.Get("sni")
+	if result.SNI == "" {
+		result.SNI = query.Get("peer")
+	}
 	result.AllowInsecure = query.Get("allowInsecure") == "1" || query.Get("allowInsecure") == "true"
+	if mtu, err := strconv.Atoi(query.Get("mtu")); err == nil && mtu > 0 {
+		result.KCPMTU = mtu
+	}
+	if finalMask := query.Get("fm"); finalMask != "" {
+		result.RawFinalMask = normalizeRawJSONString(finalMask)
+	}
 
 	return result
 }
@@ -627,6 +806,9 @@ func (p *Parser) parseVMessLink(link string) *parsedLink {
 
 	if ps, ok := vmess["ps"].(string); ok {
 		result.Name = ps
+	}
+	if id, ok := vmess["id"].(string); ok {
+		result.UUID = id
 	}
 	if add, ok := vmess["add"].(string); ok {
 		result.Server = add
@@ -654,11 +836,17 @@ func (p *Parser) parseVMessLink(link string) *parsedLink {
 	if path, ok := vmess["path"].(string); ok {
 		result.Path = path
 	}
+	if tls, ok := vmess["tls"].(string); ok {
+		result.Security = tls
+	}
+	if sni, ok := vmess["sni"].(string); ok {
+		result.SNI = sni
+	}
 
 	return result
 }
 
-func (p *Parser) convertOutbound(raw json.RawMessage, index int, originalData map[string]*originalLinkData) (*models.ProxyConfig, error) {
+func (p *Parser) convertOutbound(raw json.RawMessage, index int, originalMatcher *originalLinkMatcher) (*models.ProxyConfig, error) {
 	var baseOutbound struct {
 		Protocol       string                 `json:"protocol"`
 		Tag            string                 `json:"tag"`
@@ -675,9 +863,10 @@ func (p *Parser) convertOutbound(raw json.RawMessage, index int, originalData ma
 	}
 
 	pc := &models.ProxyConfig{
-		Index:    index,
-		Name:     baseOutbound.SendThrough,
-		Protocol: baseOutbound.Protocol,
+		Index:       index,
+		Name:        baseOutbound.SendThrough,
+		Protocol:    baseOutbound.Protocol,
+		RawOutbound: string(raw),
 	}
 
 	if pc.Name == "" {
@@ -834,19 +1023,13 @@ func (p *Parser) convertOutbound(raw json.RawMessage, index int, originalData ma
 				}
 			}
 		}
+
+		if len(ss.FinalMask) > 0 {
+			pc.RawFinalMask = normalizeRawJSONString(string(ss.FinalMask))
+		}
 	}
 
-	key := fmt.Sprintf("%s:%d", pc.Server, pc.Port)
-	if orig, ok := originalData[key]; ok {
-		if pc.Encryption == "" || pc.Encryption == "none" {
-			if orig.Encryption != "" {
-				pc.Encryption = orig.Encryption
-			}
-		}
-		if orig.AllowInsecure {
-			pc.AllowInsecure = true
-		}
-	}
+	p.applyOriginalLinkData(pc, originalMatcher.match(pc))
 
 	if err := pc.Validate(); err != nil {
 		return nil, err
@@ -855,6 +1038,42 @@ func (p *Parser) convertOutbound(raw json.RawMessage, index int, originalData ma
 	pc.StableID = pc.GenerateStableID()
 
 	return pc, nil
+}
+
+func (p *Parser) applyOriginalLinkData(pc *models.ProxyConfig, orig *originalLinkData) {
+	if orig == nil {
+		return
+	}
+
+	if pc.Encryption == "" || pc.Encryption == "none" {
+		if orig.Encryption != "" {
+			pc.Encryption = orig.Encryption
+		}
+	}
+	if pc.Type == "" && orig.Type != "" {
+		pc.Type = orig.Type
+	}
+	if pc.Path == "" && orig.Path != "" {
+		pc.Path = orig.Path
+	}
+	if pc.Host == "" && orig.Host != "" {
+		pc.Host = orig.Host
+	}
+	if pc.Security == "" && orig.Security != "" {
+		pc.Security = orig.Security
+	}
+	if pc.SNI == "" && orig.SNI != "" {
+		pc.SNI = orig.SNI
+	}
+	if orig.AllowInsecure {
+		pc.AllowInsecure = true
+	}
+	if orig.KCPMTU > 0 {
+		pc.KCPMTU = orig.KCPMTU
+	}
+	if pc.RawFinalMask == "" && orig.RawFinalMask != "" {
+		pc.RawFinalMask = orig.RawFinalMask
+	}
 }
 
 func (p *Parser) tryDecodeBase64(data []byte) []byte {

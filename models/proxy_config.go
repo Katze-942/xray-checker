@@ -34,12 +34,15 @@ type ProxyConfig struct {
 	ServiceName      string
 	IdleTimeout      int
 	WindowsSize      int
+	KCPMTU           int
 	AllowInsecure    bool
 	ALPN             []string
 	Index            int
 	Settings         map[string]string
 	StableID         string
 	RawXhttpSettings string
+	RawFinalMask     string
+	RawOutbound      string
 	SubName          string
 }
 
@@ -108,8 +111,60 @@ func (pc *ProxyConfig) GenerateStableID() string {
 		idComponents = append(idComponents, pc.Security)
 	}
 
+	if pc.Flow != "" {
+		idComponents = append(idComponents, pc.Flow)
+	}
+
+	if pc.Encryption != "" {
+		idComponents = append(idComponents, pc.Encryption)
+	}
+
 	if pc.PublicKey != "" {
 		idComponents = append(idComponents, pc.PublicKey)
+	}
+
+	if pc.ShortID != "" {
+		idComponents = append(idComponents, pc.ShortID)
+	}
+
+	if pc.HeaderType != "" {
+		idComponents = append(idComponents, pc.HeaderType)
+	}
+
+	if pc.Path != "" {
+		idComponents = append(idComponents, pc.Path)
+	}
+
+	if pc.Host != "" {
+		idComponents = append(idComponents, pc.Host)
+	}
+
+	if pc.Mode != "" {
+		idComponents = append(idComponents, pc.Mode)
+	}
+
+	if pc.ServiceName != "" {
+		idComponents = append(idComponents, pc.ServiceName)
+	}
+
+	if pc.MultiMode {
+		idComponents = append(idComponents, "multiMode")
+	}
+
+	if kcpMTU := pc.normalizedKCPMTUForID(); kcpMTU > 0 {
+		idComponents = append(idComponents, fmt.Sprintf("kcp-mtu:%d", kcpMTU))
+	}
+
+	if len(pc.ALPN) > 0 {
+		idComponents = append(idComponents, strings.Join(pc.ALPN, ","))
+	}
+
+	if pc.RawXhttpSettings != "" {
+		idComponents = append(idComponents, pc.RawXhttpSettings)
+	}
+
+	if pc.RawFinalMask != "" {
+		idComponents = append(idComponents, pc.RawFinalMask)
 	}
 
 	idString := strings.Join(idComponents, "|")
@@ -117,6 +172,13 @@ func (pc *ProxyConfig) GenerateStableID() string {
 	hash := sha256.Sum256([]byte(idString))
 
 	return hex.EncodeToString(hash[:])[:16]
+}
+
+func (pc *ProxyConfig) normalizedKCPMTUForID() int {
+	if pc.KCPMTU > 0 {
+		return pc.KCPMTU
+	}
+	return 0
 }
 
 func (pc *ProxyConfig) GetTransportType() string {
@@ -213,6 +275,10 @@ func (pc *ProxyConfig) DebugString() string {
 		if pc.MultiMode {
 			sb.WriteString("      MultiMode:   true\n")
 		}
+	}
+
+	if transport == "kcp" && pc.KCPMTU > 0 {
+		sb.WriteString(fmt.Sprintf("      KCP MTU:   %d\n", pc.KCPMTU))
 	}
 
 	if transport == "tcp" && pc.HeaderType != "" && pc.HeaderType != "none" {

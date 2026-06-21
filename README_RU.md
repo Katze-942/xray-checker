@@ -1,3 +1,10 @@
+## Изменения в этом форке
+
+- Исправлено смешивание профилей на одном `server:port`: каждая share-ссылка теперь проверяется как отдельный профиль, а не заменяется последней ссылкой на тот же endpoint.
+- Исправлена проверка разных вариантов одного и того же сервера: RAW, XHTTP, KCP, XDNS и Encryption больше не схлопываются в один результат.
+- Добавлена поддержка XDNS share-ссылок: параметр `fm` сохраняется и попадает в итоговый Xray-конфиг как `finalmask`, поэтому XDNS-профили реально запускаются и проверяются.
+- Настройки транспорта из share-ссылки сохраняются, но сервер и пользователь профиля не подменяются данными из raw outbound.
+
 # Xray Checker
 
 [![GitHub Release](https://img.shields.io/github/v/release/kutovoys/xray-checker?style=flat&color=blue)](https://github.com/kutovoys/xray-checker/releases/latest)
