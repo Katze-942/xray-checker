@@ -273,6 +273,9 @@ components:
         checkInterval:
           type: integer
           example: 300
+        checkConcurrency:
+          type: integer
+          example: 4
         checkMethod:
           type: string
           enum: [ip, status, download]
@@ -322,4 +325,3 @@ components:
         ip:
           type: string
           example: "203.0.113.1"
-

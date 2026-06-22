@@ -168,6 +168,7 @@ GET /api/v1/config
   "success": true,
   "data": {
     "checkInterval": 300,
+    "checkConcurrency": 4,
     "checkMethod": "ip",
     "timeout": 30,
     "startPort": 10000,

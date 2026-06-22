@@ -52,6 +52,14 @@ Time in seconds between subscription update checks. Only used when `SUBSCRIPTION
 
 Time in seconds between proxy availability checks. Each check verifies all configured proxies.
 
+### PROXY_CHECK_CONCURRENCY
+
+- CLI: `--proxy-check-concurrency`
+- Required: No
+- Default: `0`
+
+Maximum number of proxies checked at the same time. `0` means unlimited parallel checks.
+
 ### PROXY_CHECK_METHOD
 
 - CLI: `--proxy-check-method`

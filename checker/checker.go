@@ -18,25 +18,26 @@ import (
 )
 
 type ProxyChecker struct {
-	proxies         []*models.ProxyConfig
-	startPort       int
-	ipCheck         string
-	currentIP       string
-	httpClient      *http.Client
-	currentMetrics  sync.Map
-	latencyMetrics  sync.Map
-	ipInitialized   bool
-	ipCheckTimeout  int
-	genMethodURL    string
-	downloadURL     string
-	downloadTimeout int
-	downloadMinSize int64
-	checkMethod     string
-	mu              sync.RWMutex
-	generation      uint64
+	proxies          []*models.ProxyConfig
+	startPort        int
+	ipCheck          string
+	currentIP        string
+	httpClient       *http.Client
+	currentMetrics   sync.Map
+	latencyMetrics   sync.Map
+	ipInitialized    bool
+	ipCheckTimeout   int
+	genMethodURL     string
+	downloadURL      string
+	downloadTimeout  int
+	downloadMinSize  int64
+	checkMethod      string
+	checkConcurrency int
+	mu               sync.RWMutex
+	generation       uint64
 }
 
-func NewProxyChecker(proxies []*models.ProxyConfig, startPort int, ipCheckURL string, ipCheckTimeout int, genMethodURL string, downloadURL string, downloadTimeout int, downloadMinSize int64, checkMethod string) *ProxyChecker {
+func NewProxyChecker(proxies []*models.ProxyConfig, startPort int, ipCheckURL string, ipCheckTimeout int, genMethodURL string, downloadURL string, downloadTimeout int, downloadMinSize int64, checkMethod string, checkConcurrency int) *ProxyChecker {
 	return &ProxyChecker{
 		proxies:   proxies,
 		startPort: startPort,
@@ -44,12 +45,13 @@ func NewProxyChecker(proxies []*models.ProxyConfig, startPort int, ipCheckURL st
 		httpClient: &http.Client{
 			Timeout: time.Second * time.Duration(ipCheckTimeout),
 		},
-		ipCheckTimeout:  ipCheckTimeout,
-		genMethodURL:    genMethodURL,
-		downloadURL:     downloadURL,
-		downloadTimeout: downloadTimeout,
-		downloadMinSize: downloadMinSize,
-		checkMethod:     checkMethod,
+		ipCheckTimeout:   ipCheckTimeout,
+		genMethodURL:     genMethodURL,
+		downloadURL:      downloadURL,
+		downloadTimeout:  downloadTimeout,
+		downloadMinSize:  downloadMinSize,
+		checkMethod:      checkMethod,
+		checkConcurrency: checkConcurrency,
 	}
 }
 
@@ -343,6 +345,43 @@ func (pc *ProxyChecker) UpdateProxies(newProxies []*models.ProxyConfig) {
 	pc.proxies = newProxies
 }
 
+func runProxyChecks(proxies []*models.ProxyConfig, concurrency int, check func(*models.ProxyConfig)) {
+	if len(proxies) == 0 {
+		return
+	}
+
+	if concurrency <= 0 || concurrency >= len(proxies) {
+		var wg sync.WaitGroup
+		for _, proxy := range proxies {
+			wg.Add(1)
+			go func(p *models.ProxyConfig) {
+				defer wg.Done()
+				check(p)
+			}(proxy)
+		}
+		wg.Wait()
+		return
+	}
+
+	jobs := make(chan *models.ProxyConfig)
+	var wg sync.WaitGroup
+	for i := 0; i < concurrency; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for proxy := range jobs {
+				check(proxy)
+			}
+		}()
+	}
+
+	for _, proxy := range proxies {
+		jobs <- proxy
+	}
+	close(jobs)
+	wg.Wait()
+}
+
 func (pc *ProxyChecker) CheckAllProxies() {
 	if _, err := pc.GetCurrentIP(); err != nil {
 		logger.Warn("Error getting current IP: %v", err)
@@ -355,15 +394,9 @@ func (pc *ProxyChecker) CheckAllProxies() {
 	currentGeneration := atomic.LoadUint64(&pc.generation)
 	pc.mu.RUnlock()
 
-	var wg sync.WaitGroup
-	for _, proxy := range proxiesToCheck {
-		wg.Add(1)
-		go func(p *models.ProxyConfig, gen uint64) {
-			defer wg.Done()
-			pc.checkProxyInternal(p, gen, true)
-		}(proxy, currentGeneration)
-	}
-	wg.Wait()
+	runProxyChecks(proxiesToCheck, pc.checkConcurrency, func(proxy *models.ProxyConfig) {
+		pc.checkProxyInternal(proxy, currentGeneration, true)
+	})
 }
 
 func (pc *ProxyChecker) GetProxyStatus(name string) (bool, time.Duration, error) {

@@ -168,6 +168,7 @@ Returns current checker configuration.
   "success": true,
   "data": {
     "checkInterval": 300,
+    "checkConcurrency": 4,
     "checkMethod": "ip",
     "timeout": 30,
     "startPort": 10000,

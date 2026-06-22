@@ -4,7 +4,7 @@
 - Исправлена проверка разных вариантов одного и того же сервера: RAW, XHTTP, KCP, XDNS и Encryption больше не схлопываются в один результат.
 - Добавлена поддержка XDNS share-ссылок: параметр `fm` сохраняется и попадает в итоговый Xray-конфиг как `finalmask`, поэтому XDNS-профили реально запускаются и проверяются.
 - Настройки транспорта из share-ссылки сохраняются, но сервер и пользователь профиля не подменяются данными из raw outbound.
-
+- Поддержка PROXY_CHECK_CONCURRENCY, сколько одновременных проверок можно запустить.
 # Xray Checker
 
 <div align="center">
@@ -64,6 +64,7 @@ Full list of features available in the [documentation](https://xray-checker.kuto
 ```bash
 docker run -d \
   -e SUBSCRIPTION_URL=https://your-subscription-url/sub \
+  -e PROXY_CHECK_CONCURRENCY=4 \
   -p 2112:2112 \
   kutovoys/xray-checker
 ```
@@ -76,6 +77,7 @@ services:
     image: kutovoys/xray-checker
     environment:
       - SUBSCRIPTION_URL=https://your-subscription-url/sub
+      - PROXY_CHECK_CONCURRENCY=4
     ports:
       - "2112:2112"
 ```
