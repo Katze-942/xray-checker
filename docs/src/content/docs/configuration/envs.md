@@ -50,7 +50,7 @@ Time in seconds between subscription update checks. Only used when `SUBSCRIPTION
 - Required: No
 - Default: `300`
 
-Time in seconds between proxy availability checks. Each check verifies all configured proxies.
+Delay in seconds after a full proxy availability check cycle finishes before the next cycle starts. Proxy check cycles do not overlap.
 
 ### PROXY_CHECK_CONCURRENCY
 

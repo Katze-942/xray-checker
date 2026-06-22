@@ -124,11 +124,17 @@ func main() {
 		return
 	}
 
-	checkScheduler := gocron.NewScheduler(time.UTC)
-	checkScheduler.Every(config.CLIConfig.Proxy.CheckInterval).Seconds().Do(func() {
-		runCheckIteration()
-	})
-	checkScheduler.StartAsync()
+	if config.CLIConfig.Proxy.CheckInterval <= 0 {
+		logger.Fatal("Proxy check interval must be greater than 0 seconds")
+	}
+
+	go func() {
+		for {
+			runCheckIteration()
+			logger.Debug("Next proxy check iteration in %d seconds", config.CLIConfig.Proxy.CheckInterval)
+			time.Sleep(time.Duration(config.CLIConfig.Proxy.CheckInterval) * time.Second)
+		}
+	}()
 
 	if config.CLIConfig.Subscription.Update {
 		updateScheduler := gocron.NewScheduler(time.UTC)
