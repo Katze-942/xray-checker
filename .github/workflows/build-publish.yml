@@ -2,6 +2,8 @@ name: Build Docker images
 
 on:
   push:
+    branches:
+      - "**"
     tags:
       - "v*"
   workflow_dispatch:
@@ -27,6 +29,7 @@ jobs:
       DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
       BUILD_REF: ${{ github.event.inputs.ref || github.ref }}
       IMAGE_TAG: ${{ github.event.inputs.image_tag }}
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -40,19 +43,42 @@ jobs:
         id: docker-tags
         shell: bash
         run: |
+          sanitize_tag() {
+            local tag="$1"
+            tag="${tag#refs/heads/}"
+            tag="${tag#refs/tags/}"
+            tag="$(printf '%s' "${tag}" | sed -E 's#[^A-Za-z0-9_.-]+#-#g; s#^[.-]+##; s#[.-]+$##')"
+            if [[ -z "${tag}" ]]; then
+              tag="build"
+            fi
+            printf '%.128s' "${tag}"
+          }
+
           repo="${GITHUB_REPOSITORY,,}"
           image_tag="${IMAGE_TAG}"
           if [[ -z "${image_tag}" ]]; then
-            image_tag="${BUILD_REF##*/}"
+            if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+              image_tag="${BUILD_REF}"
+            else
+              image_tag="${GITHUB_REF_NAME}"
+            fi
           fi
+          image_tag="$(sanitize_tag "${image_tag}")"
+          sha_tag="sha-${GITHUB_SHA::12}"
           echo "version_tag=${image_tag}" >> "$GITHUB_OUTPUT"
           {
             echo "tags<<EOF"
-            echo "ghcr.io/${repo}:latest"
             echo "ghcr.io/${repo}:${image_tag}"
+            echo "ghcr.io/${repo}:${sha_tag}"
+            if [[ "${GITHUB_REF_TYPE}" == "tag" || "${GITHUB_REF_NAME}" == "${DEFAULT_BRANCH}" ]]; then
+              echo "ghcr.io/${repo}:latest"
+            fi
             if [[ -n "${DOCKERHUB_USERNAME}" && -n "${DOCKERHUB_TOKEN}" ]]; then
-              echo "${DOCKERHUB_USERNAME}/xray-checker:latest"
               echo "${DOCKERHUB_USERNAME}/xray-checker:${image_tag}"
+              echo "${DOCKERHUB_USERNAME}/xray-checker:${sha_tag}"
+              if [[ "${GITHUB_REF_TYPE}" == "tag" || "${GITHUB_REF_NAME}" == "${DEFAULT_BRANCH}" ]]; then
+                echo "${DOCKERHUB_USERNAME}/xray-checker:latest"
+              fi
             fi
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
