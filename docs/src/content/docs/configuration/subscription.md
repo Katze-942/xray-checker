@@ -48,7 +48,11 @@ vless://uuid@example.com:443?encryption=none&security=tls#proxy1
 trojan://password@example.com:443?security=tls#proxy2
 vmess://base64encodedconfig
 ss://base64encodedconfig
+hysteria2://auth@example.com:443?sni=example.com&pcs=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef#proxy4
+hy2://auth@example.com:443?sni=example.com&pcs=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef#proxy5
 ```
+
+Both `hysteria2://` and the shorthand `hy2://` are accepted for Hysteria2 profiles. The `pcs` parameter is passed through as the TLS certificate SHA-256 pin. API responses and Prometheus metrics use the canonical protocol value `hysteria` for these profiles.
 
 ### 3. V2Ray JSON File
 

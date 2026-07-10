@@ -3,6 +3,7 @@
 - Исправлено смешивание профилей на одном `server:port`: каждая share-ссылка теперь проверяется как отдельный профиль, а не заменяется последней ссылкой на тот же endpoint.
 - Исправлена проверка разных вариантов одного и того же сервера: RAW, XHTTP, KCP, XDNS и Encryption больше не схлопываются в один результат.
 - Добавлена поддержка XDNS share-ссылок: параметр `fm` сохраняется и попадает в итоговый Xray-конфиг как `finalmask`, поэтому XDNS-профили реально запускаются и проверяются.
+- Добавлена поддержка Hysteria2 share-ссылок `hysteria2://` и `hy2://`, включая TLS pin `pcs`.
 - Настройки транспорта из share-ссылки сохраняются, но сервер и пользователь профиля не подменяются данными из raw outbound.
 - Поддержка PROXY_CHECK_CONCURRENCY, сколько одновременных проверок можно запустить.
 - Проверки прокси больше не накладываются друг на друга: новая итерация начинается только после завершения предыдущей и паузы `PROXY_CHECK_INTERVAL`.
@@ -29,7 +30,7 @@
 
 </div>
 
-Xray Checker is a tool for monitoring proxy server availability with support for VLESS, VMess, Trojan, and Shadowsocks protocols. It automatically tests connections through Xray Core and provides metrics for Prometheus, as well as API endpoints for integration with monitoring systems.
+Xray Checker is a tool for monitoring proxy server availability with support for VLESS, VMess, Trojan, Shadowsocks, and Hysteria2 protocols. It automatically tests connections through Xray Core and provides metrics for Prometheus, as well as API endpoints for integration with monitoring systems.
 
 <div align="center">
   <img src=".github/screen/xray-checker.webp" alt="Dashboard Screenshot">
@@ -40,7 +41,7 @@ Xray Checker is a tool for monitoring proxy server availability with support for
 
 ## 🚀 Key Features
 
-- 🔍 Monitoring of Xray proxy servers (VLESS, VMess, Trojan, Shadowsocks)
+- 🔍 Monitoring of Xray proxy servers (VLESS, VMess, Trojan, Shadowsocks, Hysteria2)
 - 🔄 Automatic configuration updates from subscription (multiple subscriptions supported)
 - 📊 Prometheus metrics export with Pushgateway support
 - 🌐 REST API with OpenAPI/Swagger documentation
@@ -53,7 +54,7 @@ Xray Checker is a tool for monitoring proxy server availability with support for
 - 🌍 Automatic geo files management (geoip.dat, geosite.dat)
 - 📝 Flexible configuration loading:
   - URL subscriptions (base64, JSON)
-  - Share links (vless://, vmess://, trojan://, ss://)
+  - Share links (vless://, vmess://, trojan://, ss://, hysteria2://, hy2://)
   - JSON configuration files
   - Folders with configurations
 

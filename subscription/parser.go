@@ -44,6 +44,7 @@ type libXrayOutbound struct {
 }
 
 type libXraySettings struct {
+	Version    int    `json:"version"`
 	Address    string `json:"address"`
 	Port       int    `json:"port"`
 	Level      int    `json:"level"`
@@ -66,16 +67,19 @@ type libXrayStreamSettings struct {
 	GrpcSettings        *libXrayGrpcSettings        `json:"grpcSettings"`
 	HttpSettings        *libXrayHttpSettings        `json:"httpSettings"`
 	HttpupgradeSettings *libXrayHttpupgradeSettings `json:"httpupgradeSettings"`
+	HysteriaSettings    json.RawMessage             `json:"hysteriaSettings"`
 	XhttpSettings       json.RawMessage             `json:"xhttpSettings"`
 	SplithttpSettings   json.RawMessage             `json:"splithttpSettings"`
 	FinalMask           json.RawMessage             `json:"finalmask"`
 }
 
 type libXrayTlsSettings struct {
-	ServerName    string   `json:"serverName"`
-	AllowInsecure bool     `json:"allowInsecure"`
-	Fingerprint   string   `json:"fingerprint"`
-	Alpn          []string `json:"alpn"`
+	ServerName           string   `json:"serverName"`
+	AllowInsecure        bool     `json:"allowInsecure"`
+	Fingerprint          string   `json:"fingerprint"`
+	Alpn                 []string `json:"alpn"`
+	PinnedPeerCertSha256 string   `json:"pinnedPeerCertSha256"`
+	VerifyPeerCertByName string   `json:"verifyPeerCertByName"`
 }
 
 type libXrayRealitySettings struct {
@@ -124,6 +128,11 @@ type libXrayXhttpSettings struct {
 	Path string `json:"path"`
 	Host string `json:"host"`
 	Mode string `json:"mode"`
+}
+
+type libXrayHysteriaSettings struct {
+	Version int    `json:"version"`
+	Auth    string `json:"auth"`
 }
 
 type originalLinkData struct {
@@ -894,6 +903,8 @@ func (p *Parser) convertOutbound(raw json.RawMessage, index int, originalMatcher
 		case "shadowsocks":
 			pc.Password = flatSettings.Password
 			pc.Method = flatSettings.Method
+		case "hysteria":
+			pc.HysteriaVersion = flatSettings.Version
 		}
 	} else {
 		var stdSettings xrayStandardSettings
@@ -950,6 +961,19 @@ func (p *Parser) convertOutbound(raw json.RawMessage, index int, originalMatcher
 			pc.AllowInsecure = ss.TlsSettings.AllowInsecure
 			pc.Fingerprint = ss.TlsSettings.Fingerprint
 			pc.ALPN = ss.TlsSettings.Alpn
+			pc.PinnedPeerCertSha256 = ss.TlsSettings.PinnedPeerCertSha256
+			pc.VerifyPeerCertByName = ss.TlsSettings.VerifyPeerCertByName
+		}
+
+		if len(ss.HysteriaSettings) > 0 && string(ss.HysteriaSettings) != "null" {
+			pc.RawHysteriaSettings = normalizeRawJSONString(string(ss.HysteriaSettings))
+			var parsed libXrayHysteriaSettings
+			if err := json.Unmarshal(ss.HysteriaSettings, &parsed); err == nil {
+				pc.HysteriaAuth = parsed.Auth
+				if pc.HysteriaVersion == 0 {
+					pc.HysteriaVersion = parsed.Version
+				}
+			}
 		}
 
 		if ss.RealitySettings != nil {

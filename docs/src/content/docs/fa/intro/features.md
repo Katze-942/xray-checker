@@ -6,7 +6,7 @@ tableOfContents: false
 
 ### 🚀 امکانات اصلی
 
-- 🔍 نظارت بر سلامت سرورهای پروکسی Xray با پشتیبانی از پروتکل‌های مختلف (VLESS، VMess، Trojan، Shadowsocks)
+- 🔍 نظارت بر سلامت سرورهای پروکسی Xray با پشتیبانی از پروتکل‌های مختلف (VLESS، VMess، Trojan، Shadowsocks، Hysteria2)
 
 - 🔄 به‌روزرسانی خودکار پیکربندی پروکسی از URL‌های اشتراک با [فواصل قابل تنظیم](/fa/configuration/envs#subscription_update_interval)
 

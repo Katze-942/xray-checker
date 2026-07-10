@@ -123,6 +123,8 @@ Returns full information for all proxies.
 }
 ```
 
+For Hysteria2 profiles imported from `hysteria2://` or `hy2://` links, the `protocol` field is `hysteria`.
+
 ### Get Proxy by ID
 
 ```http

@@ -123,6 +123,8 @@ GET /api/v1/proxies
 }
 ```
 
+Для профилей Hysteria2, импортированных из ссылок `hysteria2://` или `hy2://`, поле `protocol` имеет значение `hysteria`.
+
 ### Получить прокси по ID
 
 ```http

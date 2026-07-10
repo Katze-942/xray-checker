@@ -6,7 +6,7 @@ tableOfContents: false
 
 ### 🚀 Core Features
 
-- 🔍 Monitor the health of Xray proxy servers with support for various protocols (VLESS, VMess, Trojan, Shadowsocks)
+- 🔍 Monitor the health of Xray proxy servers with support for various protocols (VLESS, VMess, Trojan, Shadowsocks, Hysteria2)
 
 - 🔄 Automatic proxy configuration updates from subscription URLs with [configurable intervals](/configuration/envs#subscription_update_interval)
 

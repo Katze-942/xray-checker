@@ -8,42 +8,47 @@ import (
 )
 
 type ProxyConfig struct {
-	Protocol         string
-	Server           string
-	Port             int
-	Name             string
-	Security         string
-	Type             string
-	UUID             string
-	Flow             string
-	Encryption       string
-	HeaderType       string
-	Path             string
-	Host             string
-	SNI              string
-	Fingerprint      string
-	PublicKey        string
-	ShortID          string
-	Mode             string
-	Password         string
-	Method           string
-	Level            int
-	AlterId          int
-	VMessAid         int
-	MultiMode        bool
-	ServiceName      string
-	IdleTimeout      int
-	WindowsSize      int
-	KCPMTU           int
-	AllowInsecure    bool
-	ALPN             []string
-	Index            int
-	Settings         map[string]string
-	StableID         string
-	RawXhttpSettings string
-	RawFinalMask     string
-	RawOutbound      string
-	SubName          string
+	Protocol             string
+	Server               string
+	Port                 int
+	Name                 string
+	Security             string
+	Type                 string
+	UUID                 string
+	Flow                 string
+	Encryption           string
+	HeaderType           string
+	Path                 string
+	Host                 string
+	SNI                  string
+	Fingerprint          string
+	PublicKey            string
+	ShortID              string
+	Mode                 string
+	Password             string
+	Method               string
+	HysteriaVersion      int
+	HysteriaAuth         string
+	Level                int
+	AlterId              int
+	VMessAid             int
+	MultiMode            bool
+	ServiceName          string
+	IdleTimeout          int
+	WindowsSize          int
+	KCPMTU               int
+	AllowInsecure        bool
+	PinnedPeerCertSha256 string
+	VerifyPeerCertByName string
+	ALPN                 []string
+	Index                int
+	Settings             map[string]string
+	StableID             string
+	RawXhttpSettings     string
+	RawHysteriaSettings  string
+	RawFinalMask         string
+	RawOutbound          string
+	SubName              string
 }
 
 func (pc *ProxyConfig) Validate() error {
@@ -69,6 +74,10 @@ func (pc *ProxyConfig) Validate() error {
 	case "shadowsocks":
 		if pc.Password == "" || pc.Method == "" {
 			return fmt.Errorf("password and method are required for Shadowsocks")
+		}
+	case "hysteria":
+		if pc.GetHysteriaVersion() != 2 {
+			return fmt.Errorf("unsupported Hysteria version: %d", pc.HysteriaVersion)
 		}
 	default:
 		return fmt.Errorf("unsupported protocol: %s", pc.Protocol)
@@ -96,6 +105,20 @@ func (pc *ProxyConfig) GenerateStableID() string {
 		}
 		if pc.Protocol == "shadowsocks" && pc.Method != "" {
 			idComponents = append(idComponents, pc.Method)
+		}
+	case "hysteria":
+		idComponents = append(idComponents, fmt.Sprintf("hysteria-version:%d", pc.GetHysteriaVersion()))
+		if pc.HysteriaAuth != "" {
+			idComponents = append(idComponents, pc.HysteriaAuth)
+		}
+		if pc.PinnedPeerCertSha256 != "" {
+			idComponents = append(idComponents, pc.PinnedPeerCertSha256)
+		}
+		if pc.VerifyPeerCertByName != "" {
+			idComponents = append(idComponents, pc.VerifyPeerCertByName)
+		}
+		if pc.RawHysteriaSettings != "" {
+			idComponents = append(idComponents, pc.RawHysteriaSettings)
 		}
 	}
 
@@ -216,6 +239,13 @@ func (pc *ProxyConfig) GetUserLevel() int {
 	return pc.Level
 }
 
+func (pc *ProxyConfig) GetHysteriaVersion() int {
+	if pc.HysteriaVersion == 0 {
+		return 2
+	}
+	return pc.HysteriaVersion
+}
+
 func (pc *ProxyConfig) GetServiceName() string {
 	if pc.ServiceName == "" {
 		return ""
@@ -250,6 +280,9 @@ func (pc *ProxyConfig) DebugString() string {
 	case "shadowsocks":
 		sb.WriteString(fmt.Sprintf("      Method:   %s\n", pc.Method))
 		sb.WriteString(fmt.Sprintf("      Password: %s\n", maskSecret(pc.Password)))
+	case "hysteria":
+		sb.WriteString(fmt.Sprintf("      Version:  %d\n", pc.GetHysteriaVersion()))
+		sb.WriteString(fmt.Sprintf("      Auth:     %s\n", maskSecret(pc.HysteriaAuth)))
 	}
 
 	transport := pc.GetTransportType()
@@ -308,6 +341,12 @@ func (pc *ProxyConfig) DebugString() string {
 		}
 		if pc.AllowInsecure {
 			sb.WriteString("      AllowInsecure: true\n")
+		}
+		if pc.PinnedPeerCertSha256 != "" {
+			sb.WriteString("      PinnedPeerCertSha256: (present)\n")
+		}
+		if pc.VerifyPeerCertByName != "" {
+			sb.WriteString(fmt.Sprintf("      VerifyPeerCertByName: %s\n", pc.VerifyPeerCertByName))
 		}
 	}
 

@@ -48,7 +48,11 @@ vless://uuid@example.com:443?encryption=none&security=tls#proxy1
 trojan://password@example.com:443?security=tls#proxy2
 vmess://base64encodedconfig
 ss://base64encodedconfig
+hysteria2://auth@example.com:443?sni=example.com&pcs=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef#proxy4
+hy2://auth@example.com:443?sni=example.com&pcs=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef#proxy5
 ```
+
+Для профилей Hysteria2 принимаются обе схемы: `hysteria2://` и сокращённая `hy2://`. Параметр `pcs` передаётся как SHA-256 pin TLS-сертификата. В ответах API и метриках Prometheus такие профили имеют каноническое значение протокола `hysteria`.
 
 ### 3. JSON-файл V2Ray
 

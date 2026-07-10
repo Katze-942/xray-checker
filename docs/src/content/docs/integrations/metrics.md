@@ -14,7 +14,7 @@ Status metric indicating proxy availability:
 - Type: Gauge
 - Values: 1 (working) or 0 (failed)
 - Labels:
-  - `protocol`: Proxy protocol (vless/vmess/trojan/shadowsocks)
+  - `protocol`: Proxy protocol (vless/vmess/trojan/shadowsocks/hysteria). Hysteria2 profiles use `hysteria`.
   - `address`: Server address and port
   - `name`: Proxy configuration name
   - `sub_name`: Subscription name (parsed from URL fragment or profile-title header)

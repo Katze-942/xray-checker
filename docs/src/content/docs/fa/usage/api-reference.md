@@ -123,6 +123,8 @@ GET /api/v1/proxies
 }
 ```
 
+برای پروفایل‌های Hysteria2 که از لینک‌های `hysteria2://` یا `hy2://` وارد شده‌اند، فیلد `protocol` مقدار `hysteria` دارد.
+
 ### دریافت پروکسی با ID
 
 ```http

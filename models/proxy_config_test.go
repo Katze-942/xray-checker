@@ -86,3 +86,72 @@ func TestGenerateStableIDDistinguishesFinalMask(t *testing.T) {
 		t.Fatal("expected different finalmask values to produce different stable IDs")
 	}
 }
+
+func TestGenerateStableIDDistinguishesHysteriaSettings(t *testing.T) {
+	base := &ProxyConfig{
+		Protocol:             "hysteria",
+		Server:               "example.com",
+		Port:                 443,
+		Type:                 "hysteria",
+		Security:             "tls",
+		HysteriaVersion:      2,
+		HysteriaAuth:         "auth-a",
+		PinnedPeerCertSha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		VerifyPeerCertByName: "cdn.example.com",
+		RawHysteriaSettings:  `{"version":2,"auth":"auth-a","udpIdleTimeout":60}`,
+	}
+
+	tests := []struct {
+		name   string
+		change func(*ProxyConfig)
+	}{
+		{name: "auth", change: func(config *ProxyConfig) { config.HysteriaAuth = "auth-b" }},
+		{name: "pcs", change: func(config *ProxyConfig) {
+			config.PinnedPeerCertSha256 = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+		}},
+		{name: "vcn", change: func(config *ProxyConfig) { config.VerifyPeerCertByName = "other.example.com" }},
+		{name: "raw settings", change: func(config *ProxyConfig) {
+			config.RawHysteriaSettings = `{"version":2,"auth":"auth-a","udpIdleTimeout":90}`
+		}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			other := *base
+			test.change(&other)
+			if base.GenerateStableID() == other.GenerateStableID() {
+				t.Fatalf("expected %s to affect Hysteria stable ID", test.name)
+			}
+		})
+	}
+}
+
+func TestTLSPinsDoNotChangeExistingProtocolStableIDs(t *testing.T) {
+	base := &ProxyConfig{
+		Protocol: "vless",
+		Server:   "example.com",
+		Port:     443,
+		UUID:     "00000000-0000-0000-0000-000000000000",
+		Type:     "xhttp",
+		Security: "tls",
+	}
+	other := *base
+	other.PinnedPeerCertSha256 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	other.VerifyPeerCertByName = "cdn.example.com"
+
+	if base.GenerateStableID() != other.GenerateStableID() {
+		t.Fatal("expected TLS pin fields to preserve existing non-Hysteria stable IDs")
+	}
+}
+
+func TestValidateHysteriaVersion(t *testing.T) {
+	config := &ProxyConfig{Protocol: "hysteria", Server: "example.com", Port: 443}
+	if err := config.Validate(); err != nil {
+		t.Fatalf("expected omitted Hysteria version to default to 2, got %v", err)
+	}
+
+	config.HysteriaVersion = 1
+	if err := config.Validate(); err == nil {
+		t.Fatal("expected Hysteria version 1 to be rejected")
+	}
+}

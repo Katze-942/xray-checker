@@ -6,7 +6,7 @@ tableOfContents: false
 
 ### 🚀 Основные возможности
 
-- 🔍 Мониторинг работоспособности Xray-прокси серверов с поддержкой различных протоколов (VLESS, VMess, Trojan, Shadowsocks)
+- 🔍 Мониторинг работоспособности Xray-прокси серверов с поддержкой различных протоколов (VLESS, VMess, Trojan, Shadowsocks, Hysteria2)
 
 - 🔄 Автоматическое обновление конфигурации прокси из подписки (subscription) с [настраиваемым интервалом](/ru/configuration/envs#subscription_update_interval)
 

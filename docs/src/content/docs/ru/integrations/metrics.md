@@ -14,7 +14,7 @@ Xray Checker предоставляет две метрики Prometheus для 
 - Тип: Gauge
 - Значения: 1 (работает) или 0 (не работает)
 - Метки:
-  - `protocol`: Протокол прокси (vless/vmess/trojan/shadowsocks)
+  - `protocol`: Протокол прокси (vless/vmess/trojan/shadowsocks/hysteria). Для профилей Hysteria2 используется `hysteria`.
   - `address`: Адрес и порт сервера
   - `name`: Имя конфигурации прокси
   - `sub_name`: Имя подписки (из фрагмента URL или заголовка profile-title)

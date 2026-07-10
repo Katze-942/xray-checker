@@ -237,7 +237,8 @@ components:
           example: 443
         protocol:
           type: string
-          enum: [vless, vmess, trojan, shadowsocks]
+          description: Canonical proxy protocol name. Hysteria2 profiles are reported as hysteria.
+          enum: [vless, vmess, trojan, shadowsocks, hysteria]
           example: "vless"
         proxyPort:
           type: integer

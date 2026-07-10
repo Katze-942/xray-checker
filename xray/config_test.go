@@ -250,3 +250,121 @@ func TestGenerateConfigPreservesFinalMaskAndStripsRemovedKCPFields(t *testing.T)
 		t.Fatalf("expected generated XDNS config to build, got %v", err)
 	}
 }
+
+func TestGenerateHysteria2ConfigPreservesTLSAndTransportSettings(t *testing.T) {
+	const pin = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	proxy := &models.ProxyConfig{
+		Index:                0,
+		Name:                 "hy2",
+		Protocol:             "hysteria",
+		Server:               "resolved.example",
+		Port:                 8443,
+		Type:                 "hysteria",
+		Security:             "tls",
+		SNI:                  "cdn.example.com",
+		Fingerprint:          "chrome",
+		ALPN:                 []string{"h3"},
+		HysteriaVersion:      2,
+		HysteriaAuth:         "canonical-auth",
+		PinnedPeerCertSha256: pin,
+		VerifyPeerCertByName: "cdn.example.com",
+		RawHysteriaSettings:  `{"version":2,"auth":"raw-auth","udpIdleTimeout":90,"masquerade":{"type":"string","content":"ok","statusCode":200}}`,
+		RawFinalMask:         `{"udp":[{"type":"salamander","settings":{"password":"secret"}}]}`,
+		RawOutbound: `{
+			"protocol":"hysteria",
+			"settings":{"version":2,"address":"original.example","port":443},
+			"streamSettings":{
+				"network":"hysteria",
+				"security":"tls",
+				"tlsSettings":{"serverName":"raw.example","pinnedPeerCertSha256":"abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"},
+				"hysteriaSettings":{"version":2,"auth":"raw-auth","udpIdleTimeout":90,"masquerade":{"type":"string","content":"ok","statusCode":200}}
+			}
+		}`,
+	}
+
+	generator := NewConfigGenerator()
+	configBytes, err := generator.GenerateConfig([]*models.ProxyConfig{proxy}, 10000, "none")
+	if err != nil {
+		t.Fatalf("GenerateConfig returned error: %v", err)
+	}
+
+	var config struct {
+		Outbounds []map[string]interface{} `json:"outbounds"`
+	}
+	if err := json.Unmarshal(configBytes, &config); err != nil {
+		t.Fatalf("failed to unmarshal generated config: %v", err)
+	}
+
+	var outbound map[string]interface{}
+	for _, candidate := range config.Outbounds {
+		if candidate["tag"] == "hy2_0" {
+			outbound = candidate
+			break
+		}
+	}
+	if outbound == nil {
+		t.Fatal("generated Hysteria outbound not found")
+	}
+
+	settings := outbound["settings"].(map[string]interface{})
+	if settings["address"] != "resolved.example" || int(settings["port"].(float64)) != 8443 {
+		t.Fatalf("expected canonical Hysteria endpoint, got %v", settings)
+	}
+	if int(settings["version"].(float64)) != 2 {
+		t.Fatalf("expected Hysteria version 2, got %v", settings["version"])
+	}
+
+	streamSettings := outbound["streamSettings"].(map[string]interface{})
+	if streamSettings["network"] != "hysteria" || streamSettings["security"] != "tls" {
+		t.Fatalf("expected hysteria over TLS, got %v", streamSettings)
+	}
+	hysteriaSettings := streamSettings["hysteriaSettings"].(map[string]interface{})
+	if hysteriaSettings["auth"] != "canonical-auth" {
+		t.Fatalf("expected canonical Hysteria auth, got %v", hysteriaSettings["auth"])
+	}
+	if int(hysteriaSettings["udpIdleTimeout"].(float64)) != 90 {
+		t.Fatalf("expected raw udpIdleTimeout to be preserved, got %v", hysteriaSettings["udpIdleTimeout"])
+	}
+
+	tlsSettings := streamSettings["tlsSettings"].(map[string]interface{})
+	if tlsSettings["serverName"] != "cdn.example.com" {
+		t.Fatalf("expected canonical TLS serverName, got %v", tlsSettings["serverName"])
+	}
+	if tlsSettings["pinnedPeerCertSha256"] != pin {
+		t.Fatalf("expected canonical pcs, got %v", tlsSettings["pinnedPeerCertSha256"])
+	}
+	if tlsSettings["verifyPeerCertByName"] != "cdn.example.com" {
+		t.Fatalf("expected vcn to be preserved, got %v", tlsSettings["verifyPeerCertByName"])
+	}
+	if _, ok := streamSettings["finalmask"].(map[string]interface{}); !ok {
+		t.Fatalf("expected Hysteria finalmask to be preserved, got %v", streamSettings["finalmask"])
+	}
+
+	if err := generator.ValidateConfig(configBytes); err != nil {
+		t.Fatalf("expected generated Hysteria config to build, got %v", err)
+	}
+}
+
+func TestValidateHysteria2ConfigRejectsInvalidPCS(t *testing.T) {
+	proxy := &models.ProxyConfig{
+		Name:                 "hy2",
+		Protocol:             "hysteria",
+		Server:               "example.com",
+		Port:                 443,
+		Type:                 "hysteria",
+		Security:             "tls",
+		SNI:                  "example.com",
+		HysteriaVersion:      2,
+		HysteriaAuth:         "auth",
+		PinnedPeerCertSha256: "invalid",
+	}
+
+	generator := NewConfigGenerator()
+	configBytes, err := generator.GenerateConfig([]*models.ProxyConfig{proxy}, 10000, "none")
+	if err != nil {
+		t.Fatalf("GenerateConfig returned error: %v", err)
+	}
+	if err := generator.ValidateConfig(configBytes); err == nil {
+		t.Fatal("expected invalid pcs to be rejected by Xray config validation")
+	}
+}

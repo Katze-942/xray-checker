@@ -189,6 +189,13 @@ func (g *ConfigGenerator) generateProxyOutbound(proxy *models.ProxyConfig) map[s
 				},
 			},
 		}
+
+	case "hysteria":
+		outbound["settings"] = map[string]interface{}{
+			"version": proxy.GetHysteriaVersion(),
+			"address": proxy.Server,
+			"port":    proxy.Port,
+		}
 	}
 
 	outbound["streamSettings"] = g.generateRuntimeStreamSettings(proxy)
@@ -283,6 +290,12 @@ func (g *ConfigGenerator) enforceStreamSettingsFromProxy(streamSettings map[stri
 		if len(proxy.ALPN) > 0 {
 			tlsSettings["alpn"] = proxy.ALPN
 		}
+		if proxy.PinnedPeerCertSha256 != "" {
+			tlsSettings["pinnedPeerCertSha256"] = proxy.PinnedPeerCertSha256
+		}
+		if proxy.VerifyPeerCertByName != "" {
+			tlsSettings["verifyPeerCertByName"] = proxy.VerifyPeerCertByName
+		}
 	case "reality":
 		realitySettings := ensureMap(streamSettings, "realitySettings")
 		realitySettings["serverName"] = proxy.SNI
@@ -302,6 +315,17 @@ func (g *ConfigGenerator) enforceStreamSettingsFromProxy(streamSettings map[stri
 		g.normalizeKCPSettings(streamSettings, proxy)
 	case "mkcp":
 		g.normalizeKCPSettings(streamSettings, proxy)
+	case "hysteria":
+		g.enforceHysteriaSettings(ensureMap(streamSettings, "hysteriaSettings"), proxy)
+	}
+}
+
+func (g *ConfigGenerator) enforceHysteriaSettings(settings map[string]interface{}, proxy *models.ProxyConfig) {
+	settings["version"] = proxy.GetHysteriaVersion()
+	if proxy.HysteriaAuth != "" {
+		settings["auth"] = proxy.HysteriaAuth
+	} else if _, ok := settings["auth"]; !ok {
+		settings["auth"] = ""
 	}
 }
 
@@ -386,6 +410,12 @@ func (g *ConfigGenerator) generateStreamSettings(proxy *models.ProxyConfig) map[
 		}
 		if len(proxy.ALPN) > 0 {
 			tlsSettings["alpn"] = proxy.ALPN
+		}
+		if proxy.PinnedPeerCertSha256 != "" {
+			tlsSettings["pinnedPeerCertSha256"] = proxy.PinnedPeerCertSha256
+		}
+		if proxy.VerifyPeerCertByName != "" {
+			tlsSettings["verifyPeerCertByName"] = proxy.VerifyPeerCertByName
 		}
 		ss["tlsSettings"] = tlsSettings
 	}
@@ -482,6 +512,17 @@ func (g *ConfigGenerator) generateStreamSettings(proxy *models.ProxyConfig) map[
 			}
 			ss["xhttpSettings"] = xhttpSettings
 		}
+
+	case "hysteria":
+		hysteriaSettings := map[string]interface{}{}
+		if proxy.RawHysteriaSettings != "" {
+			if err := json.Unmarshal([]byte(proxy.RawHysteriaSettings), &hysteriaSettings); err != nil {
+				logger.Warn("Failed to parse Hysteria settings for %s: %v", proxy.Name, err)
+				hysteriaSettings = map[string]interface{}{}
+			}
+		}
+		g.enforceHysteriaSettings(hysteriaSettings, proxy)
+		ss["hysteriaSettings"] = hysteriaSettings
 	}
 
 	return ss
