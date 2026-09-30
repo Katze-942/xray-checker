@@ -33,6 +33,7 @@ func NewParser() *Parser {
 type libXrayResponse struct {
 	Success bool            `json:"success"`
 	Data    json.RawMessage `json:"data"`
+	Error   string          `json:"error"`
 }
 
 type libXrayOutbound struct {
@@ -272,28 +273,39 @@ func (p *Parser) Parse(subscriptionData string) (*ParseResult, error) {
 // parseViaLibXray attempts to parse all configs at once via libXray.
 // Returns parsed configs or nil if parsing fails.
 func (p *Parser) parseViaLibXray(cleanedData []byte, originalLinks []*originalLinkData) []*models.ProxyConfig {
-	base64Data := base64.StdEncoding.EncodeToString(cleanedData)
-
-	resultBase64 := libXray.ConvertShareLinksToXrayJson(base64Data)
-
-	resultBytes, err := base64.StdEncoding.DecodeString(resultBase64)
+	response, err := invokeLibXray(string(cleanedData))
 	if err != nil {
-		logger.Debug("Failed to decode libXray response: %v", err)
-		return nil
-	}
-
-	var response libXrayResponse
-	if err := json.Unmarshal(resultBytes, &response); err != nil {
-		logger.Debug("Failed to parse libXray response: %v", err)
+		logger.Debug("Failed to invoke libXray: %v", err)
 		return nil
 	}
 
 	if !response.Success {
-		logger.Debug("libXray batch parsing returned success=false")
+		logger.Debug("libXray batch parsing failed: %s", response.Error)
 		return nil
 	}
 
 	return p.extractOutbounds(response.Data, newOriginalLinkMatcher(originalLinks))
+}
+
+func invokeLibXray(text string) (*libXrayResponse, error) {
+	payload, err := json.Marshal(libXray.ConvertShareLinksToXrayJsonRequest{Text: text})
+	if err != nil {
+		return nil, fmt.Errorf("marshal libXray payload: %w", err)
+	}
+	request, err := json.Marshal(libXray.LibXrayInvokeRequest{
+		APIVersion: libXray.LibXrayAPIVersion,
+		Method:     libXray.LibXrayMethodConvertShareLinksToXrayJson,
+		Payload:    payload,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("marshal libXray request: %w", err)
+	}
+
+	var response libXrayResponse
+	if err := json.Unmarshal([]byte(libXray.Invoke(string(request))), &response); err != nil {
+		return nil, fmt.Errorf("parse libXray response: %w", err)
+	}
+	return &response, nil
 }
 
 // parseLineByLine parses each config line individually, skipping broken ones.
@@ -309,25 +321,15 @@ func (p *Parser) parseLineByLine(cleanedData []byte, originalLinks []*originalLi
 			continue
 		}
 
-		lineBase64 := base64.StdEncoding.EncodeToString([]byte(line))
-		resultBase64 := libXray.ConvertShareLinksToXrayJson(lineBase64)
-
-		resultBytes, err := base64.StdEncoding.DecodeString(resultBase64)
+		response, err := invokeLibXray(line)
 		if err != nil {
-			logger.Warn("Skipping invalid config line (decode error): %.50s...", line)
-			skippedCount++
-			continue
-		}
-
-		var response libXrayResponse
-		if err := json.Unmarshal(resultBytes, &response); err != nil {
-			logger.Warn("Skipping invalid config line (parse error): %.50s...", line)
+			logger.Warn("Skipping invalid config line (libXray error): %.50s...", line)
 			skippedCount++
 			continue
 		}
 
 		if !response.Success {
-			logger.Warn("Skipping invalid config line (libXray error): %.50s...", line)
+			logger.Warn("Skipping invalid config line (libXray error: %s): %.50s...", response.Error, line)
 			skippedCount++
 			continue
 		}
