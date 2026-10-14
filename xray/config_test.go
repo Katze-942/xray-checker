@@ -2,7 +2,13 @@ package xray
 
 import (
 	"encoding/json"
+	"io"
+	"net"
+	"os"
+	"path/filepath"
+	"strconv"
 	"testing"
+	"time"
 
 	"xray-checker/models"
 )
@@ -130,7 +136,7 @@ func TestGenerateConfigPreservesPositiveKCPMTU(t *testing.T) {
 		Index:    0,
 		Name:     "raw",
 		Protocol: "vless",
-		Server:   "example.com",
+		Server:   "127.0.0.1",
 		Port:     53,
 		UUID:     "00000000-0000-0000-0000-000000000000",
 		KCPMTU:   130,
@@ -181,7 +187,7 @@ func TestGenerateConfigPreservesFinalMaskAndStripsRemovedKCPFields(t *testing.T)
 		Index:        0,
 		Name:         "xdns",
 		Protocol:     "vless",
-		Server:       "example.com",
+		Server:       "127.0.0.1",
 		Port:         53,
 		UUID:         "00000000-0000-0000-0000-000000000000",
 		KCPMTU:       130,
@@ -191,7 +197,7 @@ func TestGenerateConfigPreservesFinalMaskAndStripsRemovedKCPFields(t *testing.T)
 			"protocol":"vless",
 			"settings":{
 				"vnext":[{
-					"address":"example.com",
+					"address":"127.0.0.1",
 					"port":53,
 					"users":[{"id":"00000000-0000-0000-0000-000000000000","encryption":"none"}]
 				}]
@@ -200,7 +206,7 @@ func TestGenerateConfigPreservesFinalMaskAndStripsRemovedKCPFields(t *testing.T)
 				"network":"kcp",
 				"security":"none",
 				"kcpSettings":{"header":{"type":"none"},"seed":""},
-				"finalmask":{"udp":[{"type":"xdns","settings":{"resolvers":["example+udp://8.8.8.8:53"]}}]}
+			"finalmask":{"udp":[{"type":"xdns","settings":{"domains":[{"name":"raw.example","types":[16],"edns0":4096}],"resolvers":[{"type":"udp","settings":{"addr":"8.8.8.8:53"}}]}}]}
 			}
 		}`,
 	}
@@ -236,6 +242,7 @@ func TestGenerateConfigPreservesFinalMaskAndStripsRemovedKCPFields(t *testing.T)
 	if udpMask["type"] != "xdns" {
 		t.Fatalf("expected XDNS finalmask, got %v", udpMask["type"])
 	}
+	assertNormalizedXDNSSettings(t, udpMask["settings"].(map[string]interface{}), "example", "udp://1.1.1.1:53", []int{16})
 	kcpSettings := streamSettings["kcpSettings"].(map[string]interface{})
 	if int(kcpSettings["mtu"].(float64)) != 130 {
 		t.Fatalf("expected KCP MTU 130, got %v", kcpSettings["mtu"])
@@ -248,6 +255,261 @@ func TestGenerateConfigPreservesFinalMaskAndStripsRemovedKCPFields(t *testing.T)
 	}
 	if err := generator.ValidateConfig(configBytes); err != nil {
 		t.Fatalf("expected generated XDNS config to build, got %v", err)
+	}
+}
+
+func TestGenerateConfigNormalizesVersion26930XDNSFinalMask(t *testing.T) {
+	proxy := &models.ProxyConfig{
+		Index:    0,
+		Name:     "xdns",
+		Protocol: "vless",
+		Server:   "127.0.0.1",
+		Port:     53,
+		UUID:     "00000000-0000-0000-0000-000000000000",
+		Type:     "kcp",
+		RawOutbound: `{
+			"protocol":"vless",
+			"streamSettings":{
+				"network":"kcp",
+				"security":"none",
+				"finalmask":{"udp":[{"type":"xdns","settings":{
+					"domains":[{"name":"x99.example","types":[1,16,28],"edns0":4096}],
+					"resolvers":[{"type":"udp","settings":{"addr":"127.0.0.1:53"}}]
+				}}]}
+			}
+		}`,
+	}
+
+	generator := NewConfigGenerator()
+	configBytes, err := generator.GenerateConfig([]*models.ProxyConfig{proxy}, 10000, "none")
+	if err != nil {
+		t.Fatalf("GenerateConfig returned error: %v", err)
+	}
+	if err := generator.ValidateConfig(configBytes); err != nil {
+		t.Fatalf("expected v26.9.30 XDNS config to build after normalization, got %v", err)
+	}
+
+	settings := generatedXDNSSettings(t, configBytes)
+	assertNormalizedXDNSSettings(t, settings, "x99.example", "udp://127.0.0.1:53", []int{1, 16, 28})
+}
+
+func TestGenerateConfigPreservesLegacyXDNSRecordType(t *testing.T) {
+	proxy := &models.ProxyConfig{
+		Index:        0,
+		Name:         "xdns",
+		Protocol:     "vless",
+		Server:       "127.0.0.1",
+		Port:         53,
+		UUID:         "00000000-0000-0000-0000-000000000000",
+		Type:         "kcp",
+		RawFinalMask: `{"udp":[{"type":"xdns","settings":{"resolvers":["x99.example:aaaa+udp://127.0.0.1:53"]}}]}`,
+	}
+
+	generator := NewConfigGenerator()
+	configBytes, err := generator.GenerateConfig([]*models.ProxyConfig{proxy}, 10000, "none")
+	if err != nil {
+		t.Fatalf("GenerateConfig returned error: %v", err)
+	}
+	if err := generator.ValidateConfig(configBytes); err != nil {
+		t.Fatalf("expected legacy XDNS record type to build after normalization, got %v", err)
+	}
+
+	settings := generatedXDNSSettings(t, configBytes)
+	assertNormalizedXDNSSettings(t, settings, "x99.example", "udp://127.0.0.1:53", []int{28})
+}
+
+func TestRunnerProcessesXDNSAndStopsCleanly(t *testing.T) {
+	dnsConn, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to start local DNS sink: %v", err)
+	}
+	defer dnsConn.Close()
+
+	dnsRequest := make(chan struct{}, 1)
+	go func() {
+		buffer := make([]byte, 4096)
+		for {
+			if _, _, err := dnsConn.ReadFrom(buffer); err != nil {
+				return
+			}
+			select {
+			case dnsRequest <- struct{}{}:
+			default:
+			}
+		}
+	}()
+
+	portListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to reserve local SOCKS port: %v", err)
+	}
+	inboundPort := portListener.Addr().(*net.TCPAddr).Port
+	if err := portListener.Close(); err != nil {
+		t.Fatalf("failed to release local SOCKS port: %v", err)
+	}
+
+	proxy := &models.ProxyConfig{
+		Index:        0,
+		Name:         "xdns-smoke",
+		Protocol:     "vless",
+		Server:       "127.0.0.1",
+		Port:         9,
+		UUID:         "00000000-0000-0000-0000-000000000000",
+		KCPMTU:       130,
+		Type:         "kcp",
+		RawFinalMask: `{"udp":[{"type":"xdns","settings":{"domains":[{"names":["example.test"],"types":[16],"edns0":4096}],"resolvers":[{"addrs":["udp://` + dnsConn.LocalAddr().String() + `"]}]}}]}`,
+	}
+	configBytes, err := NewConfigGenerator().GenerateConfig([]*models.ProxyConfig{proxy}, inboundPort, "none")
+	if err != nil {
+		t.Fatalf("failed to generate XDNS config: %v", err)
+	}
+	configPath := filepath.Join(t.TempDir(), "xray.json")
+	if err := os.WriteFile(configPath, configBytes, 0600); err != nil {
+		t.Fatalf("failed to write XDNS config: %v", err)
+	}
+
+	runner := NewRunner(configPath)
+	if err := runner.Start(); err != nil {
+		t.Fatalf("failed to start Xray with XDNS config: %v", err)
+	}
+	stopped := false
+	defer func() {
+		if !stopped {
+			stopResult := make(chan struct{}, 1)
+			go func() {
+				_ = runner.Stop()
+				stopResult <- struct{}{}
+			}()
+			select {
+			case <-stopResult:
+			case <-time.After(5 * time.Second):
+			}
+		}
+	}()
+
+	conn, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(inboundPort)), time.Second)
+	if err != nil {
+		t.Fatalf("failed to connect to local SOCKS inbound: %v", err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+	if _, err := conn.Write([]byte{5, 1, 0}); err != nil {
+		t.Fatalf("failed to write SOCKS greeting: %v", err)
+	}
+	var greetingReply [2]byte
+	if _, err := io.ReadFull(conn, greetingReply[:]); err != nil {
+		t.Fatalf("failed to read SOCKS greeting reply: %v", err)
+	}
+	if greetingReply != [2]byte{5, 0} {
+		t.Fatalf("unexpected SOCKS greeting reply: %v", greetingReply)
+	}
+	if _, err := conn.Write([]byte{5, 1, 0, 1, 1, 1, 1, 1, 0, 80}); err != nil {
+		t.Fatalf("failed to request a proxied connection: %v", err)
+	}
+
+	select {
+	case <-dnsRequest:
+	case <-time.After(3 * time.Second):
+		_ = conn.Close()
+		t.Fatal("Xray did not send an XDNS request to the configured resolver")
+	}
+	_ = conn.Close()
+
+	stopResult := make(chan error, 1)
+	go func() { stopResult <- runner.Stop() }()
+	select {
+	case err := <-stopResult:
+		if err != nil {
+			t.Fatalf("failed to stop Xray with XDNS active: %v", err)
+		}
+		stopped = true
+	case <-time.After(5 * time.Second):
+		stopped = true
+		t.Fatal("Xray did not stop promptly after XDNS activity")
+	}
+}
+
+func generatedXDNSSettings(t *testing.T, configBytes []byte) map[string]interface{} {
+	t.Helper()
+	var config struct {
+		Outbounds []map[string]interface{} `json:"outbounds"`
+	}
+	if err := json.Unmarshal(configBytes, &config); err != nil {
+		t.Fatalf("failed to unmarshal generated config: %v", err)
+	}
+	for _, outbound := range config.Outbounds {
+		if outbound["tag"] != "xdns_0" {
+			continue
+		}
+		streamSettings, ok := outbound["streamSettings"].(map[string]interface{})
+		if !ok {
+			t.Fatal("generated XDNS stream settings not found")
+		}
+		finalMask, ok := streamSettings["finalmask"].(map[string]interface{})
+		if !ok {
+			t.Fatal("generated XDNS finalmask not found")
+		}
+		udp, ok := finalMask["udp"].([]interface{})
+		if !ok || len(udp) != 1 {
+			t.Fatalf("expected one UDP finalmask, got %v", finalMask["udp"])
+		}
+		mask, ok := udp[0].(map[string]interface{})
+		if !ok || mask["type"] != "xdns" {
+			t.Fatalf("expected XDNS finalmask, got %v", udp[0])
+		}
+		settings, ok := mask["settings"].(map[string]interface{})
+		if !ok {
+			t.Fatal("generated XDNS settings not found")
+		}
+		return settings
+	}
+	t.Fatal("generated XDNS outbound not found")
+	return nil
+}
+
+func assertNormalizedXDNSSettings(t *testing.T, settings map[string]interface{}, wantDomain, wantResolver string, wantTypes []int) {
+	t.Helper()
+	domains, ok := settings["domains"].([]interface{})
+	if !ok || len(domains) != 1 {
+		t.Fatalf("expected one normalized XDNS domain, got %v", settings["domains"])
+	}
+	domain, ok := domains[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("invalid normalized XDNS domain: %v", domains[0])
+	}
+	names, ok := domain["names"].([]interface{})
+	if !ok || len(names) != 1 || names[0] != wantDomain {
+		t.Fatalf("expected normalized domain name %q, got %v", wantDomain, domain["names"])
+	}
+	if _, hasOldName := domain["name"]; hasOldName {
+		t.Fatalf("legacy domain field was not removed: %v", domain)
+	}
+	types, ok := domain["types"].([]interface{})
+	if !ok || len(types) != len(wantTypes) {
+		t.Fatalf("expected XDNS query types %v, got %v", wantTypes, domain["types"])
+	}
+	for i, want := range wantTypes {
+		if types[i] != float64(want) {
+			t.Fatalf("expected XDNS query types %v, got %v", wantTypes, domain["types"])
+		}
+	}
+	resolvers, ok := settings["resolvers"].([]interface{})
+	if !ok || len(resolvers) != 1 {
+		t.Fatalf("expected one normalized XDNS resolver, got %v", settings["resolvers"])
+	}
+	resolver, ok := resolvers[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("invalid normalized XDNS resolver: %v", resolvers[0])
+	}
+	addrs, ok := resolver["addrs"].([]interface{})
+	if !ok || len(addrs) != 1 || addrs[0] != wantResolver {
+		t.Fatalf("expected normalized XDNS resolver %q, got %v", wantResolver, resolver["addrs"])
+	}
+	if _, hasOldType := resolver["type"]; hasOldType {
+		t.Fatalf("legacy resolver fields were not removed: %v", resolver)
+	}
+	if _, hasOldSettings := resolver["settings"]; hasOldSettings {
+		t.Fatalf("legacy resolver fields were not removed: %v", resolver)
 	}
 }
 

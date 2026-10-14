@@ -234,6 +234,7 @@ func (g *ConfigGenerator) rawStreamSettings(proxy *models.ProxyConfig) (map[stri
 
 	g.pruneNilValues(outbound.StreamSettings)
 	g.normalizeKCPSettings(outbound.StreamSettings, proxy)
+	normalizeXDNSFinalMask(outbound.StreamSettings["finalmask"])
 	return outbound.StreamSettings, true
 }
 
@@ -380,7 +381,161 @@ func (g *ConfigGenerator) applyFinalMask(streamSettings map[string]interface{}, 
 		logger.Warn("Failed to parse finalmask for %s: %v", proxy.Name, err)
 		return
 	}
+	normalizeXDNSFinalMask(finalMask)
 	streamSettings["finalmask"] = finalMask
+}
+
+// normalizeXDNSFinalMask translates formats accepted by earlier Xray releases
+// to the names/addrs shape expected by Xray-core v26.10.10 and later.
+func normalizeXDNSFinalMask(value interface{}) {
+	finalMask, ok := value.(map[string]interface{})
+	if !ok {
+		return
+	}
+
+	for _, maskListValue := range finalMask {
+		maskList, ok := maskListValue.([]interface{})
+		if !ok {
+			continue
+		}
+		for _, maskValue := range maskList {
+			mask, ok := maskValue.(map[string]interface{})
+			if !ok || mask["type"] != "xdns" {
+				continue
+			}
+			settings, ok := mask["settings"].(map[string]interface{})
+			if ok {
+				normalizeXDNSSettings(settings)
+			}
+		}
+	}
+}
+
+func normalizeXDNSSettings(settings map[string]interface{}) {
+	domains, _ := settings["domains"].([]interface{})
+	domainConfigs := make(map[string]map[string]interface{})
+	for _, domainValue := range domains {
+		domain, ok := domainValue.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if name, ok := domain["name"].(string); ok {
+			if _, exists := domain["names"]; !exists {
+				domain["names"] = []interface{}{name}
+			}
+			delete(domain, "name")
+		}
+		if names, ok := domain["names"].([]interface{}); ok {
+			for _, nameValue := range names {
+				if name, ok := nameValue.(string); ok {
+					domainConfigs[name] = domain
+				}
+			}
+		}
+	}
+
+	resolvers, ok := settings["resolvers"].([]interface{})
+	if !ok {
+		return
+	}
+	normalizedResolvers := make([]interface{}, 0, len(resolvers))
+	legacyDomains := make([]interface{}, 0)
+	for _, resolverValue := range resolvers {
+		switch resolver := resolverValue.(type) {
+		case string:
+			domain, protocol, address, queryType, ok := parseLegacyXDNSResolver(resolver)
+			if !ok {
+				normalizedResolvers = append(normalizedResolvers, resolverValue)
+				continue
+			}
+			domainConfig, exists := domainConfigs[domain]
+			if !exists {
+				domainConfig = map[string]interface{}{
+					"names": []interface{}{domain},
+					"types": []interface{}{float64(queryType)},
+				}
+				domainConfigs[domain] = domainConfig
+				legacyDomains = append(legacyDomains, domainConfig)
+			} else {
+				addXDNSQueryType(domainConfig, queryType)
+			}
+			normalizedResolvers = append(normalizedResolvers, map[string]interface{}{
+				"addrs": []interface{}{protocol + "://" + address},
+			})
+		case map[string]interface{}:
+			if _, currentFormat := resolver["addrs"]; !currentFormat {
+				protocol, _ := resolver["type"].(string)
+				resolverSettings, _ := resolver["settings"].(map[string]interface{})
+				address, _ := resolverSettings["addr"].(string)
+				if (protocol == "udp" || protocol == "tcp") && address != "" {
+					if !strings.Contains(address, "://") {
+						address = protocol + "://" + address
+					}
+					resolver["addrs"] = []interface{}{address}
+					delete(resolver, "type")
+					delete(resolver, "settings")
+				}
+			}
+			normalizedResolvers = append(normalizedResolvers, resolverValue)
+		default:
+			normalizedResolvers = append(normalizedResolvers, resolverValue)
+		}
+	}
+	settings["resolvers"] = normalizedResolvers
+	if len(legacyDomains) > 0 {
+		settings["domains"] = append(domains, legacyDomains...)
+	}
+}
+
+func addXDNSQueryType(domain map[string]interface{}, queryType int) {
+	types, ok := domain["types"].([]interface{})
+	if !ok || len(types) == 0 {
+		// Earlier XDNS configs defaulted an unspecified resolver method to TXT.
+		types = []interface{}{float64(16)}
+	}
+	for _, value := range types {
+		if number, ok := value.(float64); ok && int(number) == queryType {
+			domain["types"] = types
+			return
+		}
+	}
+	domain["types"] = append(types, float64(queryType))
+}
+
+func parseLegacyXDNSResolver(value string) (domain, protocol, address string, queryType int, ok bool) {
+	head, address, found := strings.Cut(value, "://")
+	if !found || address == "" {
+		return "", "", "", 0, false
+	}
+	separator := strings.LastIndex(head, "+")
+	if separator <= 0 || separator == len(head)-1 {
+		return "", "", "", 0, false
+	}
+	domainSpec := head[:separator]
+	protocol = strings.ToLower(head[separator+1:])
+	if protocol != "udp" && protocol != "tcp" {
+		return "", "", "", 0, false
+	}
+
+	queryType = 16
+	if separator := strings.LastIndex(domainSpec, ":"); separator >= 0 {
+		method := strings.ToLower(domainSpec[separator+1:])
+		domainSpec = domainSpec[:separator]
+		switch method {
+		case "txt":
+			queryType = 16
+		case "a":
+			queryType = 1
+		case "aaaa":
+			queryType = 28
+		default:
+			return "", "", "", 0, false
+		}
+	}
+	if domainSpec == "" {
+		return "", "", "", 0, false
+	}
+	return domainSpec, protocol, address, queryType, true
 }
 
 func (g *ConfigGenerator) generateStreamSettings(proxy *models.ProxyConfig) map[string]interface{} {
